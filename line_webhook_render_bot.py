@@ -44,18 +44,31 @@ def reply_message(reply_token: str, text: str) -> tuple[bool, str]:
     })
 
 
-def push_message(user_id: str, text: str) -> tuple[bool, str]:
+def push_message(target_id: str, text: str) -> tuple[bool, str]:
     return line_api('/message/push', {
-        'to': user_id,
+        'to': target_id,
         'messages': [{'type': 'text', 'text': text}],
     })
+
+
+def get_target_id(source: dict) -> tuple[str | None, str | None]:
+    source_type = source.get('type')
+    if source_type == 'user':
+        return source.get('userId'), 'user'
+    if source_type == 'group':
+        return source.get('groupId'), 'group'
+    if source_type == 'room':
+        return source.get('roomId'), 'room'
+    return None, source_type
 
 
 def compact_job(job: dict) -> dict:
     return {
         'id': job['id'],
+        'mode': job['mode'],
         'text': job['text'],
-        'user_id': job['user_id'],
+        'target_id': job['target_id'],
+        'target_type': job['target_type'],
         'created_at': job['created_at'],
         'attempts': job['attempts'],
     }
@@ -122,11 +135,11 @@ class Handler(BaseHTTPRequestHandler):
             if not job:
                 self._json(404, {'ok': False, 'error': 'job not found'})
                 return
-            ok, detail = push_message(job['user_id'], text)
+            ok, detail = push_message(job['target_id'], text)
             job['status'] = 'done' if ok else 'push_failed'
             job['result'] = text
             job['push_detail'] = detail
-            self.log_json({'bridge_reply': job_id, 'ok': ok, 'detail': detail})
+            self.log_json({'bridge_reply': job_id, 'ok': ok, 'detail': detail, 'target_type': job.get('target_type')})
             self._json(200, {'ok': ok, 'detail': detail})
             return
 
@@ -143,39 +156,52 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(message, dict) or message.get('type') != 'text':
                 continue
             text = message.get('text', '')
+            stripped = text.strip()
             reply_token = event.get('replyToken')
             source = event.get('source', {}) if isinstance(event.get('source'), dict) else {}
-            user_id = source.get('userId')
+            target_id, target_type = get_target_id(source)
+            is_trjp = stripped.endswith('/trjp')
 
-            if text.strip().endswith('/trjp'):
-                source_text = text.strip()[:-5].strip()
+            # Group/room: only /trjp triggers. One-to-one: all messages trigger Hermes.
+            if not is_trjp and target_type != 'user':
+                results.append({'ignored': 'non_trjp_group_or_room_message', 'target_type': target_type})
+                continue
+
+            if not target_id:
+                if reply_token:
+                    results.append({'reply': reply_message(reply_token, '無法取得回覆目標，暫時不能處理。')})
+                continue
+
+            if is_trjp:
+                source_text = stripped[:-5].strip()
                 if not source_text:
                     if reply_token:
                         results.append({'reply': reply_message(reply_token, '請在文字後面加 /trjp，例如：你好 /trjp')})
                     continue
-                if not user_id:
-                    if reply_token:
-                        results.append({'reply': reply_message(reply_token, '無法取得使用者 ID，暫時不能翻譯。')})
-                    continue
-                job_id = str(uuid.uuid4())
-                JOBS[job_id] = {
-                    'id': job_id,
-                    'text': source_text,
-                    'user_id': user_id,
-                    'status': 'pending',
-                    'created_at': time.time(),
-                    'attempts': 0,
-                }
+                mode = 'translate'
+                job_text = source_text
                 ack = f'翻譯中…\n原文：{source_text}'
-                if reply_token:
-                    ok, detail = reply_message(reply_token, ack)
-                    results.append({'queued': job_id, 'reply_ok': ok, 'detail': detail})
-                else:
-                    results.append({'queued': job_id, 'reply_ok': False, 'detail': 'missing replyToken'})
             else:
-                if reply_token:
-                    ok, detail = reply_message(reply_token, f'收到：{text}')
-                    results.append({'reply_ok': ok, 'detail': detail})
+                mode = 'chat'
+                job_text = text
+                ack = 'Hermes 思考中…'
+
+            job_id = str(uuid.uuid4())
+            JOBS[job_id] = {
+                'id': job_id,
+                'mode': mode,
+                'text': job_text,
+                'target_id': target_id,
+                'target_type': target_type,
+                'status': 'pending',
+                'created_at': time.time(),
+                'attempts': 0,
+            }
+            if reply_token:
+                ok, detail = reply_message(reply_token, ack)
+                results.append({'queued': job_id, 'mode': mode, 'target_type': target_type, 'reply_ok': ok, 'detail': detail})
+            else:
+                results.append({'queued': job_id, 'mode': mode, 'target_type': target_type, 'reply_ok': False, 'detail': 'missing replyToken'})
 
         self.log_json({
             'path': parsed.path,
