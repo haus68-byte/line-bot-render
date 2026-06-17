@@ -14,7 +14,7 @@ JOBS = {}
 LEASE_SECONDS = 180
 
 
-def line_api(path: str, payload: dict) -> tuple[bool, str]:
+def line_api(path: str, payload: dict):
     if not CHANNEL_ACCESS_TOKEN:
         return False, 'CHANNEL_ACCESS_TOKEN not set'
     data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
@@ -37,21 +37,21 @@ def line_api(path: str, payload: dict) -> tuple[bool, str]:
         return False, f'LINE error {e}'
 
 
-def reply_message(reply_token: str, text: str) -> tuple[bool, str]:
+def reply_message(reply_token: str, text: str):
     return line_api('/message/reply', {
         'replyToken': reply_token,
         'messages': [{'type': 'text', 'text': text}],
     })
 
 
-def push_message(target_id: str, text: str) -> tuple[bool, str]:
+def push_message(target_id: str, text: str):
     return line_api('/message/push', {
         'to': target_id,
         'messages': [{'type': 'text', 'text': text}],
     })
 
 
-def get_target_id(source: dict) -> tuple[str | None, str | None]:
+def get_target_id(source: dict):
     source_type = source.get('type')
     if source_type == 'user':
         return source.get('userId'), 'user'
@@ -160,9 +160,13 @@ class Handler(BaseHTTPRequestHandler):
             reply_token = event.get('replyToken')
             source = event.get('source', {}) if isinstance(event.get('source'), dict) else {}
             target_id, target_type = get_target_id(source)
-            is_trjp = stripped.endswith('/trjp')
+            # /trjp can be used as either a prefix or suffix:
+            #   /trjp 你好
+            #   你好 /trjp
+            # One-to-one: every text message goes to Hermes; /trjp switches to translation.
+            # Group/room: only /trjp messages trigger Hermes so the bot does not answer every group chat.
+            is_trjp = stripped == '/trjp' or stripped.startswith('/trjp ') or stripped.endswith(' /trjp') or stripped.endswith('\n/trjp')
 
-            # Group/room: only /trjp triggers. One-to-one: all messages trigger Hermes.
             if not is_trjp and target_type != 'user':
                 results.append({'ignored': 'non_trjp_group_or_room_message', 'target_type': target_type})
                 continue
@@ -173,10 +177,17 @@ class Handler(BaseHTTPRequestHandler):
                 continue
 
             if is_trjp:
-                source_text = stripped[:-5].strip()
+                if stripped == '/trjp':
+                    source_text = ''
+                elif stripped.startswith('/trjp '):
+                    source_text = stripped[6:].strip()
+                elif stripped.endswith(' /trjp'):
+                    source_text = stripped[:-6].strip()
+                else:
+                    source_text = stripped[:-5].strip()
                 if not source_text:
                     if reply_token:
-                        results.append({'reply': reply_message(reply_token, '請在文字後面加 /trjp，例如：你好 /trjp')})
+                        results.append({'reply': reply_message(reply_token, '請輸入要翻譯的文字，例如：/trjp 你好 或 你好 /trjp')})
                     continue
                 mode = 'translate'
                 job_text = source_text
