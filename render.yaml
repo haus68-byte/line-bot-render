@@ -2,7 +2,7 @@ services:
   - type: web
     name: line-bot-hermes
     env: python
-    buildCommand: ""
+    buildCommand: "pip install -r requirements.txt"
     startCommand: "python3 line_webhook_render_bot.py"
     plan: free
     envVars:
@@ -10,3 +10,5 @@ services:
         value: 10000
       - key: LINE_WEBHOOK_PATH
         value: /line/webhook
+      - key: CHANNEL_ACCESS_TOKEN
+        sync: false
