@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: line-bot-hermes
+    env: python
+    buildCommand: ""
+    startCommand: "python3 line_webhook_render_bot.py"
+    plan: free
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: LINE_WEBHOOK_PATH
+        value: /line/webhook
