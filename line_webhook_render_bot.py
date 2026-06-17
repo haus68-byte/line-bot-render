@@ -3,7 +3,6 @@ import json
 import os
 from pathlib import Path
 
-LOG = Path('/Users/lucianchiu/line_webhook_render_bot.log')
 WEBHOOK_PATH = os.environ.get('LINE_WEBHOOK_PATH', '/line/webhook')
 PORT = int(os.environ.get('PORT', '10000'))
 
@@ -40,8 +39,6 @@ class Handler(BaseHTTPRequestHandler):
         }
         line = json.dumps(record, ensure_ascii=False)
         print(line, flush=True)
-        with LOG.open('a', encoding='utf-8') as f:
-            f.write(line + '\n')
         self._send(200, json.dumps({'ok': True, 'event_count': len(events)}).encode('utf-8'), content_type='application/json; charset=utf-8')
 
 if __name__ == '__main__':
